@@ -11,7 +11,12 @@ Run:
     python wc_data_jobs_scraper.py
 
 Output:
-    wc_data_jobs_YYYYMMDD_HHMM.csv  in the current directory.
+    wc_data_jobs_YYYYMMDD_HHMM.csv  in OUTPUT_DIR (default: current directory).
+
+Environment overrides (used by the GitHub Actions workflow):
+    OUTPUT_DIR        folder to write the CSV into       (default ".")
+    DAYS_OLD          only posts newer than N days       (default 14)
+    RESULTS_PER_ROLE  results per role, per source       (default 40)
 
 Notes:
     • Indeed  → no rate-limiting, most reliable for ZA
@@ -20,10 +25,13 @@ Notes:
 """
 
 import csv
+import os
+import sys
 import time
 import random
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import Path
 
 try:
     from jobspy import scrape_jobs
@@ -34,8 +42,9 @@ except ImportError:
 
 LOCATION = "Cape Town, Western Cape, South Africa"
 COUNTRY_CODE = "south africa"  # jobspy country hint for Indeed
-DAYS_OLD = 14  # posts within the last N days
-RESULTS_PER_ROLE = 40  # per role, per source — keep ≤50 to avoid blocks
+DAYS_OLD = int(os.getenv("DAYS_OLD", "14"))  # posts within the last N days
+RESULTS_PER_ROLE = int(os.getenv("RESULTS_PER_ROLE", "40"))  # per role, per source — keep ≤50 to avoid blocks
+OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "."))
 
 # Indeed only is safest; add "linkedin" if you want more volume
 # DO NOT add "glassdoor" — it returns 403 in 2025
@@ -153,7 +162,8 @@ def build_dataset(frames: list[pd.DataFrame]) -> pd.DataFrame:
             combined["date_posted"], errors="coerce"
         ).dt.strftime("%Y-%m-%d")
 
-    combined["scraped_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # UTC so timestamps are consistent between local runs and GitHub Actions
+    combined["scraped_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
     return combined.reset_index(drop=True)
 
@@ -192,9 +202,11 @@ def main():
         print("\n⚠  No jobs collected.")
         print("   Try: increasing DAYS_OLD, reducing RESULTS_PER_ROLE, or waiting")
         print("   15 minutes if you were rate-limited.")
-        return
+        # Non-zero exit so a scheduled run shows up as failed instead of silently passing
+        sys.exit(1)
 
-    filename = f"wc_data_jobs_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    filename = OUTPUT_DIR / f"wc_data_jobs_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}.csv"
 
     # QUOTE_NONNUMERIC ensures description text with commas is safely escaped
     combined.to_csv(

@@ -1,0 +1,60 @@
+name: Weekly job scrape
+
+on:
+  schedule:
+    # Every Monday at 05:00 UTC (07:00 SAST). Cron is always UTC on GitHub.
+    - cron: "0 5 * * 1"
+  workflow_dispatch: # lets you trigger a run manually from the Actions tab
+
+permissions:
+  contents: write # needed to commit the new CSV back to the repo
+
+concurrency:
+  group: weekly-scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run scraper
+        env:
+          OUTPUT_DIR: data/raw
+          DAYS_OLD: "8" # weekly run + 1 day overlap so nothing falls through the gap
+          PYTHONIOENCODING: utf-8
+        run: python wc_data_jobs_scraper.py
+
+      - name: Commit new data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add data/raw/*.csv
+          if git diff --cached --quiet; then
+            echo "No new data to commit."
+          else
+            git commit -m "data: weekly scrape $(date -u +%Y-%m-%d)"
+            git push
+          fi
+
+      - name: Upload CSV as artifact (backup)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrape-${{ github.run_id }}
+          path: data/raw/*.csv
+          if-no-files-found: ignore
+          retention-days: 30
